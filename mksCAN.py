@@ -2,31 +2,51 @@ import can
 import time
 
 class Motor:
-    def __init__(self, name, bus, version, can_id, mode='serial-vfoc', set_defaults=True, *args, **kwargs):
+    def __init__(self, name, bus, version, can_id, mode='serial-vfoc', set_default=True, *args, **kwargs):
         self.name = name
         self.bus = bus
         self.version = self.set_version(version)
         self.can_id = self.set_can_id(can_id)
         self.mode = self.set_mode(mode)
+        self.end_limit = False
 
-        if set_defaults:
-            set_defaults()
+        if set_default:
+            self.set_defaults()
             
     def set_defaults(self):
-        
-        pass
+        if 'vfoc' not in self.mode:
+            self.set_holding_current(0.5)
 
+        if 'pulse' in self.mode:
+            self.set_motor_direction(0)
 
-    def add_crc(data: list):
+        self.set_microstepping(16)
+        self.set_en_level('low')
+        self.set_screen_auto_turnoff(0)
+        self.set_locked_rotor_protection(0)
+        self.set_mplyer(1)
+        self.set_can_rate(500000)
+        self.set_can_rsp(1)
+        self.set_zero_mode('disable')
+        self.set_zero_speed(2)
+        self.set_zero_direction(0)
+        self.set_home_trigger_high(0)
+        self.set_home_direction(0)
+        self.use_home_limit_switch(1)
+        self.use_endstop_limit(0)
+
+    def add_crc(data: list) -> list:
         crc = sum(data)
         crc = 0xFF & crc
         return data.append(crc)
 
     def calibrate(self):
         data = [self.can_id, 0x80, 00]
-        return can.Message(dlc=len(data), data=self.add_crc(data))
+        msg = can.Message(dlc=len(data), data=self.add_crc(data))
+        bus.send(msg)
+        return True
 
-    def set_version(self, version):
+    def set_version(self, version: str):
         VERSIONS = {
             '42D': [1600, 3000, 800],
             '57D': [3200, 5200, 400],
@@ -34,15 +54,17 @@ class Motor:
             '35D': [800,  3000, 200],
         }
 
-        if version not in VERSIONS.keys():
+        if version.lower() not in map(str.lower, VERSIONS.keys()):
             raise ValueError(f'The only MKS Servo versions supported are {", ".join(VERSIONS)}')
 
         self.version = version
-        self.ma = VERSIONS[version[0]]
-        self.max_ma = VERSIONS[version[1]]
-        self.home_ma = VERSIONS[version[2]]
+        self.ma = VERSIONS[version][0]
+        self.max_ma = VERSIONS[version][1]
+        self.home_ma = VERSIONS[version][2]
+        
+        return version
 
-    def set_can_id(self, can_id):
+    def set_can_id(self, can_id) -> None:
         if 0x00 < can_id < 0x800: 
             if self.can_id:
                 can.Message(data=[self.can_id, ])
@@ -69,6 +91,8 @@ class Motor:
             self.max_rpm = 1500
         if 'vfoc' in mode:
             self.max_rpm = 3000
+
+        return mode
             
 
     def read_params(self, mode='addition'):
@@ -109,21 +133,16 @@ class Motor:
         
         self.set_en_level = en_level
 
-    # possible to add wrapper instead of f(x)
-    def _dir(dir: str, variable: str):
-        DIRS = ['CCW', 'CW']
-
-        if dir not in DIRS:
-            raise ValueError(f'The only {variable} supported are {", ".join(DIRS)}')
-
 
     # for pulse interface
-    def set_motor_direction(self, dir):
+    def set_motor_direction(self, dir: bool):
+        ''' 
+        If True: CCW
+
+        '''
 
         if "pulse" not in self.mode:
-            raise ValueError("Cannot set motor direction for pulse interface mode.")
-
-        self._dir(dir, "motor_directions")
+            raise ValueError("Cannot set motor direction for other modes except pulse.")
             
         self.motor_direction = dir
 
@@ -175,10 +194,10 @@ class Motor:
         
         self.zero_mode = mode
 
-    def set_zero(self):
+    def set_zero_at_boot(self, set: bool):
         if self.zero_mode == 'disable':
             raise PermissionError('Cannot set zero position if zero mode is disabled.')
-        pass
+        self.zero_at_boot = set
 
     def set_zero_speed(self, speed: int):
         if speed in range(0, 5):
@@ -187,11 +206,8 @@ class Motor:
         
         raise ValueError('Speed must be set between 0-4.')
 
-    def set_zero_direction(self, dir):
-        self._dir(dir, "zero directions")
-
+    def set_zero_direction(self, dir: bool):
         self.zero_direction = dir
-
 
     def set_home_trigger_high(self, trigger: bool):
         self.home_trigger = trigger
@@ -200,8 +216,7 @@ class Motor:
     def is_home_trigger_high(self):
         return self.home_trigger
 
-    def set_home_direction(self, dir):
-        self._dir(dir, "home directions")
+    def set_home_direction(self, dir: bool):
         
         self.home_direction = dir
 
@@ -219,7 +234,7 @@ class Motor:
     def go_home(self):
         pass
 
-    def set_end_limit(self, end_limit: bool):
+    def use_endstop_limit(self, end_limit: bool):
         if not self.end_limit:
             self.go_home()
         self.end_limit = end_limit
@@ -242,4 +257,3 @@ class Motor:
     def turn(self, amount, direction, velocity, acceleration, type='absolute'):
         data = bytearray([self.can_id, ])
         msg = can.Message()
-
